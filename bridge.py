@@ -61,15 +61,15 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     # Lookback windows
     current_block = w3.eth.get_block_number()
     if chain == 'destination':
-        # Small window—grader calls unwrap a couple blocks ago
-        start_block = max(1, current_block - 15)
+        # Wider lookback, but we’ll query per-block by blockHash (no big ranges)
+        start_block = max(1, current_block - 30)
     else:
         start_block = max(1, current_block - 30)
 
     print(f"Scanning blocks {start_block} to {current_block} on {chain}")
 
     if chain == 'source':
-        # --- SOURCE: read Deposit via ABI helper (works fine on Fuji) ---
+        # --- SOURCE: Deposit -> wrap (this was already working) ---
         source_contract = w3.eth.contract(
             address=Web3.to_checksum_address(source_info['address']),
             abi=source_info['abi']
@@ -113,54 +113,42 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             print(f"Error getting Deposit events: {e}")
 
     elif chain == 'destination':
-        # --- DESTINATION: fetch Unwrap via RAW get_logs + topic (more reliable on BSC public RPCs) ---
-        destination_address = Web3.to_checksum_address(destination_info['address'])
-        destination_contract = w3.eth.contract(address=destination_address, abi=destination_info['abi'])
+        # --- DESTINATION: Unwrap -> withdraw (use per-block blockHash to avoid rate limits) ---
+        import time
 
-        # keccak of "Unwrap(address,address,uint256)" (matches args: underlying_token, to, amount)
+        destination_address = Web3.to_checksum_address(destination_info['address'])
+        destination_contract = w3.eth.contract(
+            address=destination_address,
+            abi=destination_info['abi']
+        )
+
+        # Topic for Unwrap(address,address,uint256)
         unwrap_topic0 = Web3.keccak(text="Unwrap(address,address,uint256)").hex()
 
-        def fetch_unwrap_logs(from_blk, to_blk):
-            # use raw JSON-RPC filter (camelCase keys)
-            return w3.eth.get_logs({
-                "fromBlock": hex(from_blk),
-                "toBlock": hex(to_blk),
-                "address": destination_address,
-                "topics": [unwrap_topic0]
-            })
+        raw_logs = []
+        # scan strictly per-block using blockHash; tiny sleep to avoid throttle
+        for b in range(start_block, current_block + 1):
+            try:
+                blk = w3.eth.get_block(b)
+                logs = w3.eth.get_logs({
+                    "blockHash": blk.hash,
+                    "address": destination_address,
+                    "topics": [unwrap_topic0]
+                })
+                if logs:
+                    raw_logs.extend(logs)
+            except Exception:
+                # ignore single-block failures and continue
+                pass
+            time.sleep(0.05)
 
-        # try a small range; if rate-limited, shrink and finally scan block-by-block
-        try:
-            raw_logs = fetch_unwrap_logs(start_block, current_block)
-        except Exception as e:
-            print(f"Primary get_logs failed on destination: {e} — shrinking window")
-            raw_logs = []
-            # step down to 3-block chunks
-            step = 3
-            blk = start_block
-            while blk <= current_block:
-                sub_end = min(current_block, blk + step - 1)
-                try:
-                    part = fetch_unwrap_logs(blk, sub_end)
-                    if part:
-                        raw_logs.extend(part)
-                except Exception:
-                    # final fallback: single-block
-                    for b in range(blk, sub_end + 1):
-                        try:
-                            raw_logs.extend(fetch_unwrap_logs(b, b))
-                        except Exception:
-                            pass
-                blk = sub_end + 1
-
-        # decode raw logs with ABI
+        # decode logs to events
         unwrap_events = []
         for log in raw_logs:
             try:
                 ev = destination_contract.events.Unwrap().process_log(log)
                 unwrap_events.append(ev)
             except Exception:
-                # skip any mismatched logs
                 pass
 
         print(f"Found {len(unwrap_events)} Unwrap events")
@@ -180,7 +168,9 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 print(f"Processing Unwrap: token={underlying_token}, recipient={recipient}, amount={amount}")
                 try:
                     nonce = w3_source.eth.get_transaction_count(warden_address, 'pending')
-                    tx = source_contract.functions.withdraw(underlying_token, recipient, amount).build_transaction({
+                    tx = source_contract.functions.withdraw(
+                        underlying_token, recipient, amount
+                    ).build_transaction({
                         'from': warden_address,
                         'nonce': nonce,
                         'gas': 500000,
