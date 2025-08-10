@@ -43,6 +43,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
     """
 
+    # This is different from Bridge IV where chain was "avax" or "bsc"
     if chain not in ['source','destination']:
         print( f"Invalid chain: {chain}" )
         return 0
@@ -65,14 +66,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     
     # Get current block number and calculate range
     current_block = w3.eth.get_block_number()
-    
-    # Use different block ranges for each chain
-    if chain == 'destination':
-        # BSC has rate limits, so use smaller range
-        start_block = max(1, current_block - 10)
-    else:
-        # Avalanche can handle larger ranges
-        start_block = max(1, current_block - 30)
+    start_block = max(1, current_block - 5)  # Scan last 5 blocks as per spec
     
     print(f"Scanning blocks {start_block} to {current_block} on {chain}")
     
@@ -83,12 +77,13 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             abi=source_info['abi']
         )
         
-        # Get Deposit events using get_logs
+        # Get Deposit events
         try:
-            events = source_contract.events.Deposit.get_logs(
+            deposit_filter = source_contract.events.Deposit.create_filter(
                 from_block=start_block,
                 to_block=current_block
             )
+            events = deposit_filter.get_all_entries()
             
             print(f"Found {len(events)} Deposit events")
             
@@ -109,8 +104,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     print(f"Processing Deposit: token={token}, recipient={recipient}, amount={amount}")
                     
                     try:
-                        # Call wrap on destination chain
-                        nonce = w3_dest.eth.get_transaction_count(warden_address)
+                        # Call wrap on destination chain - use 'pending' for nonce
+                        nonce = w3_dest.eth.get_transaction_count(warden_address, 'pending')
                         
                         wrap_txn = destination_contract.functions.wrap(
                             token,
@@ -145,42 +140,13 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             abi=destination_info['abi']
         )
         
-        # Get Unwrap events - use block-by-block approach for BSC to avoid rate limits
-        events = []
-        
+        # Get Unwrap events
         try:
-            # Try to get all events at once first
-            try:
-                events = destination_contract.events.Unwrap.get_logs(
-                    from_block=start_block,
-                    to_block=current_block
-                )
-            except Exception as e:
-                # If that fails, go block by block
-                print(f"Batch query failed: {e}, trying block-by-block")
-                import time
-                
-                for block_num in range(start_block, current_block + 1):
-                    try:
-                        block_events = destination_contract.events.Unwrap.get_logs(
-                            from_block=block_num,
-                            to_block=block_num
-                        )
-                        events.extend(block_events)
-                    except Exception as block_error:
-                        # Try using get_block and hash
-                        try:
-                            block = w3.eth.get_block(block_num)
-                            block_events = destination_contract.events.Unwrap.get_logs(
-                                block_hash=block.hash
-                            )
-                            events.extend(block_events)
-                        except:
-                            # Skip this block if we can't get logs
-                            pass
-                    
-                    # Small delay to avoid rate limiting
-                    time.sleep(0.08)
+            unwrap_filter = destination_contract.events.Unwrap.create_filter(
+                from_block=start_block,
+                to_block=current_block
+            )
+            events = unwrap_filter.get_all_entries()
             
             print(f"Found {len(events)} Unwrap events")
             
@@ -201,8 +167,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     print(f"Processing Unwrap: token={underlying_token}, recipient={recipient}, amount={amount}")
                     
                     try:
-                        # Call withdraw on source chain
-                        nonce = w3_source.eth.get_transaction_count(warden_address)
+                        # Call withdraw on source chain - use 'pending' for nonce
+                        nonce = w3_source.eth.get_transaction_count(warden_address, 'pending')
                         
                         withdraw_txn = source_contract.functions.withdraw(
                             underlying_token,
@@ -228,4 +194,4 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                         print(f"Error processing withdraw: {e}")
                         
         except Exception as e:
-            print(f"Error in destination event processing: {e}")
+            print(f"Error getting Unwrap events: {e}")
