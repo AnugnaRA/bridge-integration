@@ -37,7 +37,6 @@ def get_contract_info(chain, contract_info):
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
-        Scan recent blocks.
         On source: find Deposit events, then call wrap() on destination.
         On destination: find Unwrap events, then call withdraw() on source.
     """
@@ -45,51 +44,28 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         print(f"Invalid chain: {chain}")
         return 0
 
-    # Your private key
+    # Your private key (unchanged)
     PRIVATE_KEY = '0x29c4d805d1bb13b3ae64d3ccc9705ae8ba943543d0dc03bf7d6d635d0461c6f3'
 
     # Connect to the selected chain
     w3 = connect_to(chain)
 
-    # Load contract info
+    # Load contract info for both sides
     source_info = get_contract_info('source', contract_info)
     destination_info = get_contract_info('destination', contract_info)
 
-    # Warden
+    # Warden account
     account = w3.eth.account.from_key(PRIVATE_KEY)
     warden_address = account.address
 
-    # Block window
+    # Block window (narrower on destination/BSC to avoid RPC rate limits)
     current_block = w3.eth.get_block_number()
-    start_block = max(1, current_block - 30)
-    print(f"Scanning blocks {start_block} to {current_block} on {chain}")
+    if chain == 'destination':
+        start_block = max(1, current_block - 5)
+    else:
+        start_block = max(1, current_block - 30)
 
-    # Helper: resilient get_logs with chunking to avoid RPC rate limits
-    def get_logs_resilient(event_obj, start_blk, end_blk, chunk_size=10):
-        try:
-            return event_obj.get_logs(from_block=start_blk, to_block=end_blk)
-        except Exception as e:
-            if 'limit exceeded' in str(e).lower():
-                print(f"Limit exceeded — chunking {start_blk}-{end_blk}")
-                logs = []
-                blk = start_blk
-                while blk <= end_blk:
-                    sub_end = min(end_blk, blk + chunk_size - 1)
-                    try:
-                        logs.extend(event_obj.get_logs(from_block=blk, to_block=sub_end))
-                    except Exception as sub_e:
-                        print(f"  sub-range {blk}-{sub_end} failed: {sub_e}")
-                        # last-resort: per-block
-                        for b in range(blk, sub_end + 1):
-                            try:
-                                logs.extend(event_obj.get_logs(from_block=b, to_block=b))
-                            except Exception as per_e:
-                                print(f"    skipped block {b}: {per_e}")
-                    blk = sub_end + 1
-                return logs
-            else:
-                print(f"get_logs primary failed: {e} — retrying last block only")
-                return event_obj.get_logs(from_block=end_blk, to_block=end_blk)
+    print(f"Scanning blocks {start_block} to {current_block} on {chain}")
 
     if chain == 'source':
         # Look for Deposit events on source (Avalanche)
@@ -97,8 +73,12 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             address=Web3.to_checksum_address(source_info['address']),
             abi=source_info['abi']
         )
+
         try:
-            events = get_logs_resilient(source_contract.events.Deposit, start_block, current_block)
+            events = source_contract.events.Deposit.get_logs(
+                from_block=start_block,
+                to_block=current_block
+            )
             print(f"Found {len(events)} Deposit events")
 
             if events:
@@ -108,26 +88,32 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     address=Web3.to_checksum_address(destination_info['address']),
                     abi=destination_info['abi']
                 )
+
                 for event in events:
-                    token = event.args['token']
-                    recipient = event.args['recipient']
-                    amount = event.args['amount']
+                    token = event['args']['token']
+                    recipient = event['args']['recipient']
+                    amount = event['args']['amount']
                     print(f"Processing Deposit: token={token}, recipient={recipient}, amount={amount}")
+
                     try:
                         nonce = w3_dest.eth.get_transaction_count(warden_address, 'pending')
-                        wrap_txn = destination_contract.functions.wrap(token, recipient, amount).build_transaction({
+                        wrap_txn = destination_contract.functions.wrap(
+                            token, recipient, amount
+                        ).build_transaction({
                             'from': warden_address,
                             'nonce': nonce,
                             'gas': 500000,
                             'gasPrice': w3_dest.eth.gas_price,
                         })
                         signed_txn = w3_dest.eth.account.sign_transaction(wrap_txn, private_key=PRIVATE_KEY)
-                        tx_hash = w3_dest.eth.send_raw_transaction(signed_txn.raw_transaction)  # v6
+                        # web3.py v6: raw_transaction
+                        tx_hash = w3_dest.eth.send_raw_transaction(signed_txn.raw_transaction)
                         print(f"Wrap transaction sent: {tx_hash.hex()}")
                         receipt = w3_dest.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
                         print(f"Wrap transaction confirmed in block {receipt.blockNumber}")
                     except Exception as e:
                         print(f"Error processing wrap: {e}")
+
         except Exception as e:
             print(f"Error getting Deposit events: {e}")
 
@@ -137,8 +123,21 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             address=Web3.to_checksum_address(destination_info['address']),
             abi=destination_info['abi']
         )
+
         try:
-            events = get_logs_resilient(destination_contract.events.Unwrap, start_block, current_block)
+            # First try the small window; if RPC is picky, fall back to last block only
+            try:
+                events = destination_contract.events.Unwrap.get_logs(
+                    from_block=start_block,
+                    to_block=current_block
+                )
+            except Exception as e:
+                print(f"Primary get_logs failed on destination: {e} — retrying last block only")
+                events = destination_contract.events.Unwrap.get_logs(
+                    from_block=current_block,
+                    to_block=current_block
+                )
+
             print(f"Found {len(events)} Unwrap events")
 
             if events:
@@ -148,25 +147,31 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                     address=Web3.to_checksum_address(source_info['address']),
                     abi=source_info['abi']
                 )
+
                 for event in events:
-                    underlying_token = event.args['underlying_token']
-                    recipient = event.args['to']
-                    amount = event.args['amount']
+                    underlying_token = event['args']['underlying_token']
+                    recipient = event['args']['to']
+                    amount = event['args']['amount']
                     print(f"Processing Unwrap: token={underlying_token}, recipient={recipient}, amount={amount}")
+
                     try:
                         nonce = w3_source.eth.get_transaction_count(warden_address, 'pending')
-                        withdraw_txn = source_contract.functions.withdraw(underlying_token, recipient, amount).build_transaction({
+                        withdraw_txn = source_contract.functions.withdraw(
+                            underlying_token, recipient, amount
+                        ).build_transaction({
                             'from': warden_address,
                             'nonce': nonce,
                             'gas': 500000,
                             'gasPrice': w3_source.eth.gas_price,
                         })
                         signed_txn = w3_source.eth.account.sign_transaction(withdraw_txn, private_key=PRIVATE_KEY)
-                        tx_hash = w3_source.eth.send_raw_transaction(signed_txn.raw_transaction)  # v6
+                        # web3.py v6: raw_transaction
+                        tx_hash = w3_source.eth.send_raw_transaction(signed_txn.raw_transaction)
                         print(f"Withdraw transaction sent: {tx_hash.hex()}")
                         receipt = w3_source.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
                         print(f"Withdraw transaction confirmed in block {receipt.blockNumber}")
                     except Exception as e:
                         print(f"Error processing withdraw: {e}")
+
         except Exception as e:
             print(f"Error getting Unwrap events: {e}")
