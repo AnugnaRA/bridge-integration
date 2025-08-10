@@ -70,13 +70,25 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     print(f"Scanning blocks {start_block} to {current_block} on {chain}")
 
-    def get_logs_resilient(event_obj, start_blk, end_blk):
-        try:
-            return event_obj.get_logs(from_block=start_blk, to_block=end_blk)
-        except Exception as e:
-            print(f"get_logs primary failed: {e} — retrying last block window")
-            last = max(1, end_blk - 1)
-            return event_obj.get_logs(from_block=last, to_block=end_blk)
+        def get_logs_resilient(event_obj, start_blk, end_blk, step=5):
+        logs = []
+        blk = start_blk
+        while blk <= end_blk:
+            to_blk = min(end_blk, blk + step)
+            try:
+                logs.extend(event_obj.get_logs(
+                    from_block=blk, to_block=to_blk))
+            except Exception as e:
+                # fallback: try each block in the range one-by-one
+                for b in range(blk, to_blk + 1):
+                    try:
+                        logs.extend(event_obj.get_logs(
+                            from_block=b, to_block=b))
+                    except Exception as ee:
+                        # still rate-limited? skip this single block
+                        print(f"get_logs skipped block {b}: {ee}")
+            blk = to_blk + 1
+        return logs
 
     if chain == 'source':
         # We're on source chain, look for Deposit events
@@ -159,7 +171,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         try:
             events = get_logs_resilient(
                 destination_contract.events.Unwrap,
-                start_block,
+                start_block, def get_logs_resilient(
                 current_block
             )
 
@@ -167,27 +179,27 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
             if len(events) > 0:
                 # Connect to source chain
-                w3_source = connect_to('source')
-                source_contract = w3_source.eth.contract(
+                w3_source=connect_to('source')
+                source_contract=w3_source.eth.contract(
                     address=Web3.to_checksum_address(source_info['address']),
                     abi=source_info['abi']
                 )
 
                 # Process each Unwrap event
                 for event in events:
-                    underlying_token = event.args['underlying_token']
-                    recipient = event.args['to']
-                    amount = event.args['amount']
+                    underlying_token=event.args['underlying_token']
+                    recipient=event.args['to']
+                    amount=event.args['amount']
 
                     print(
                         f"Processing Unwrap: token={underlying_token}, recipient={recipient}, amount={amount}")
 
                     try:
                         # Call withdraw on source chain
-                        nonce = w3_source.eth.get_transaction_count(
+                        nonce=w3_source.eth.get_transaction_count(
                             warden_address, 'pending')
 
-                        withdraw_txn = source_contract.functions.withdraw(
+                        withdraw_txn=source_contract.functions.withdraw(
                             underlying_token,
                             recipient,
                             amount
@@ -198,15 +210,15 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                             'gasPrice': w3_source.eth.gas_price,
                         })
 
-                        signed_txn = w3_source.eth.account.sign_transaction(
+                        signed_txn=w3_source.eth.account.sign_transaction(
                             withdraw_txn, private_key=PRIVATE_KEY)
-                        tx_hash = w3_source.eth.send_raw_transaction(
+                        tx_hash=w3_source.eth.send_raw_transaction(
                             signed_txn.raw_transaction)
 
                         print(f"Withdraw transaction sent: {tx_hash.hex()}")
 
                         # Wait for confirmation
-                        receipt = w3_source.eth.wait_for_transaction_receipt(
+                        receipt=w3_source.eth.wait_for_transaction_receipt(
                             tx_hash, timeout=120)
                         print(
                             f"Withdraw transaction confirmed in block {receipt.blockNumber}")
