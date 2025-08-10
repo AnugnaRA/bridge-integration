@@ -58,10 +58,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     account = w3.eth.account.from_key(PRIVATE_KEY)
     warden_address = account.address
 
-    # Block window: wider on destination so we don't miss the grader's Unwrap
+    # Block window (wider on destination, but we’ll use a hash-based fallback there)
     current_block = w3.eth.get_block_number()
     if chain == 'destination':
-        start_block = max(1, current_block - 20)   # was 5; widen to catch 10–20 blocks back
+        start_block = max(1, current_block - 20)
     else:
         start_block = max(1, current_block - 30)
 
@@ -124,27 +124,28 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         )
 
         try:
-            # Try small range first
+            # Try normal small-range get_logs first
             try:
                 events = destination_contract.events.Unwrap.get_logs(
                     from_block=start_block,
                     to_block=current_block
                 )
             except Exception as e:
-                # Final fallback: scan last ~20 blocks one-by-one to dodge "limit exceeded"
-                print(f"Primary get_logs failed on destination: {e} — scanning per-block fallback")
+                # Fallback: per-block **by block hash** (more reliable on BSC public RPCs)
+                print(f"Primary get_logs failed on destination: {e} — block-hash fallback")
+                import time
                 events = []
                 fallback_start = max(1, current_block - 20)
                 for b in range(fallback_start, current_block + 1):
                     try:
-                        part = destination_contract.events.Unwrap.get_logs(
-                            from_block=b, to_block=b
-                        )
+                        blk = w3.eth.get_block(b)
+                        part = destination_contract.events.Unwrap.get_logs(block_hash=blk.hash)
                         if part:
                             events.extend(part)
-                    except Exception as ee:
-                        # Ignore single-block failures and keep going
+                    except Exception:
                         pass
+                    # tiny delay to dodge rate limit
+                    time.sleep(0.08)
 
             print(f"Found {len(events)} Unwrap events")
 
