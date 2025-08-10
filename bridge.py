@@ -78,11 +78,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
         # Get Deposit events
         try:
-            deposit_filter = source_contract.events.Deposit.create_filter(
+            events = source_contract.events.Deposit.get_logs(
                 fromBlock=start_block,
                 toBlock=current_block
             )
-            events = deposit_filter.get_all_entries()
 
             print(f"Found {len(events)} Deposit events")
 
@@ -106,8 +105,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
                     try:
                         # Call wrap on destination chain
-                        nonce = w3_dest.eth.get_transaction_count(
-                            warden_address)
+                        nonce = w3_dest.eth.get_transaction_count(warden_address, 'pending')
 
                         wrap_txn = destination_contract.functions.wrap(
                             token,
@@ -122,8 +120,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
                         signed_txn = w3_dest.eth.account.sign_transaction(
                             wrap_txn, private_key=PRIVATE_KEY)
-                        tx_hash = w3_dest.eth.send_raw_transaction(
-                            signed_txn.rawTransaction)
+                        tx_hash = w3_dest.eth.send_raw_transaction(signed_txn.raw_transaction)
 
                         print(f"Wrap transaction sent: {tx_hash.hex()}")
 
@@ -148,11 +145,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
         # Get Unwrap events
         try:
-            unwrap_filter = destination_contract.events.Unwrap.create_filter(
+            events = destination_contract.events.Unwrap.get_logs(
                 fromBlock=start_block,
                 toBlock=current_block
             )
-            events = unwrap_filter.get_all_entries()
 
             print(f"Found {len(events)} Unwrap events")
 
@@ -175,8 +171,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
                     try:
                         # Call withdraw on source chain
-                        nonce = w3_source.eth.get_transaction_count(
-                            warden_address)
+                        nonce = w3_source.eth.get_transaction_count(warden_address, 'pending')
 
                         withdraw_txn = source_contract.functions.withdraw(
                             underlying_token,
@@ -191,8 +186,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
                         signed_txn = w3_source.eth.account.sign_transaction(
                             withdraw_txn, private_key=PRIVATE_KEY)
-                        tx_hash = w3_source.eth.send_raw_transaction(
-                            signed_txn.rawTransaction)
+                        tx_hash = w3_source.eth.send_raw_transaction(signed_txn.raw_transaction)
 
                         print(f"Withdraw transaction sent: {tx_hash.hex()}")
 
