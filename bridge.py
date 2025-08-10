@@ -65,9 +65,18 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     # Get current block number and calculate range
     current_block = w3.eth.get_block_number()
-    start_block = max(1, current_block - 5)  # Scan last 5 blocks
+    # scan last ~30 blocks to avoid missing events
+    start_block = max(1, current_block - 30)
 
     print(f"Scanning blocks {start_block} to {current_block} on {chain}")
+
+    def get_logs_resilient(event_obj, start_blk, end_blk):
+        try:
+            return event_obj.get_logs(from_block=start_blk, to_block=end_blk)
+        except Exception as e:
+            print(f"get_logs primary failed: {e} — retrying last block window")
+            last = max(1, end_blk - 1)
+            return event_obj.get_logs(from_block=last, to_block=end_blk)
 
     if chain == 'source':
         # We're on source chain, look for Deposit events
@@ -78,9 +87,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
         # Get Deposit events
         try:
-            events = source_contract.events.Deposit.get_logs(
-                from_block=start_block,
-                to_block=current_block
+            events = get_logs_resilient(
+                source_contract.events.Deposit,
+                start_block,
+                current_block
             )
 
             print(f"Found {len(events)} Deposit events")
@@ -105,7 +115,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
                     try:
                         # Call wrap on destination chain
-                        nonce = w3_dest.eth.get_transaction_count(warden_address, 'pending')
+                        nonce = w3_dest.eth.get_transaction_count(
+                            warden_address, 'pending')
 
                         wrap_txn = destination_contract.functions.wrap(
                             token,
@@ -120,7 +131,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
                         signed_txn = w3_dest.eth.account.sign_transaction(
                             wrap_txn, private_key=PRIVATE_KEY)
-                        tx_hash = w3_dest.eth.send_raw_transaction(signed_txn.raw_transaction)
+                        tx_hash = w3_dest.eth.send_raw_transaction(
+                            signed_txn.raw_transaction)
 
                         print(f"Wrap transaction sent: {tx_hash.hex()}")
 
@@ -145,9 +157,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
         # Get Unwrap events
         try:
-            events = destination_contract.events.Unwrap.get_logs(
-                from_block=start_block,
-                to_block=current_block
+            events = get_logs_resilient(
+                destination_contract.events.Unwrap,
+                start_block,
+                current_block
             )
 
             print(f"Found {len(events)} Unwrap events")
@@ -171,7 +184,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
                     try:
                         # Call withdraw on source chain
-                        nonce = w3_source.eth.get_transaction_count(warden_address, 'pending')
+                        nonce = w3_source.eth.get_transaction_count(
+                            warden_address, 'pending')
 
                         withdraw_txn = source_contract.functions.withdraw(
                             underlying_token,
@@ -186,7 +200,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
                         signed_txn = w3_source.eth.account.sign_transaction(
                             withdraw_txn, private_key=PRIVATE_KEY)
-                        tx_hash = w3_source.eth.send_raw_transaction(signed_txn.raw_transaction)
+                        tx_hash = w3_source.eth.send_raw_transaction(
+                            signed_txn.raw_transaction)
 
                         print(f"Withdraw transaction sent: {tx_hash.hex()}")
 
