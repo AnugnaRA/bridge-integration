@@ -43,6 +43,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
     """
 
+    # This is different from Bridge IV where chain was "avax" or "bsc"
     if chain not in ['source','destination']:
         print( f"Invalid chain: {chain}" )
         return 0
@@ -86,8 +87,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         # Get Deposit events using get_logs
         try:
             events = source_contract.events.Deposit.get_logs(
-                fromBlock=start_block,
-                toBlock=current_block
+                from_block=start_block,
+                to_block=current_block
             )
             
             print(f"Found {len(events)} Deposit events")
@@ -152,8 +153,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             # Try to get all events at once first
             try:
                 events = destination_contract.events.Unwrap.get_logs(
-                    fromBlock=start_block,
-                    toBlock=current_block
+                    from_block=start_block,
+                    to_block=current_block
                 )
             except Exception as e:
                 # If that fails, go block by block
@@ -163,8 +164,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 for block_num in range(start_block, current_block + 1):
                     try:
                         block_events = destination_contract.events.Unwrap.get_logs(
-                            fromBlock=block_num,
-                            toBlock=block_num
+                            from_block=block_num,
+                            to_block=block_num
                         )
                         events.extend(block_events)
                     except Exception as block_error:
@@ -172,7 +173,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                         try:
                             block = w3.eth.get_block(block_num)
                             block_events = destination_contract.events.Unwrap.get_logs(
-                                blockHash=block.hash
+                                block_hash=block.hash
                             )
                             events.extend(block_events)
                         except:
