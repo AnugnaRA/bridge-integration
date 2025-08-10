@@ -79,8 +79,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         # Get Deposit events
         try:
             events = source_contract.events.Deposit.get_logs(
-                fromBlock=start_block,
-                toBlock=current_block
+                from_block=start_block,
+                to_block=current_block
             )
 
             print(f"Found {len(events)} Deposit events")
@@ -146,8 +146,8 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         # Get Unwrap events
         try:
             events = destination_contract.events.Unwrap.get_logs(
-                fromBlock=start_block,
-                toBlock=current_block
+                from_block=start_block,
+                to_block=current_block
             )
 
             print(f"Found {len(events)} Unwrap events")
