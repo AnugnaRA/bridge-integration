@@ -43,7 +43,6 @@ def scan_blocks(chain, contract_info="contract_info.json"):
         When Unwrap events are found on the destination chain, call the 'withdraw' function on the source chain
     """
 
-    # This is different from Bridge IV where chain was "avax" or "bsc"
     if chain not in ['source','destination']:
         print( f"Invalid chain: {chain}" )
         return 0
@@ -125,7 +124,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                         })
                         
                         signed_txn = w3_dest.eth.account.sign_transaction(wrap_txn, private_key=PRIVATE_KEY)
-                        tx_hash = w3_dest.eth.send_raw_transaction(signed_txn.rawTransaction)
+                        tx_hash = w3_dest.eth.send_raw_transaction(signed_txn.raw_transaction)
                         
                         print(f"Wrap transaction sent: {tx_hash.hex()}")
                         
@@ -217,7 +216,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                         })
                         
                         signed_txn = w3_source.eth.account.sign_transaction(withdraw_txn, private_key=PRIVATE_KEY)
-                        tx_hash = w3_source.eth.send_raw_transaction(signed_txn.rawTransaction)
+                        tx_hash = w3_source.eth.send_raw_transaction(signed_txn.raw_transaction)
                         
                         print(f"Withdraw transaction sent: {tx_hash.hex()}")
                         
